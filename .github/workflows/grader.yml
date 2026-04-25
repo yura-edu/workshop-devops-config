@@ -1,0 +1,149 @@
+name: Grader
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # ── Métrica: config_file_exists ────────────────────────────────────────
+      - name: Check CI config file exists
+        id: config_exists
+        run: |
+          if [ -f ".github/workflows/ci.yml" ] || [ -f ".github/workflows/ci.yaml" ]; then
+            echo "score=1.0" >> "$GITHUB_OUTPUT"
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+            echo "✅ CI workflow file found"
+          else
+            echo "score=0.0" >> "$GITHUB_OUTPUT"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            echo "❌ No CI workflow file found at .github/workflows/ci.yml"
+          fi
+
+      # ── Métrica: config_file_valid_schema ─────────────────────────────────
+      - name: Validate CI workflow schema
+        id: config_valid
+        run: |
+          if [ "${{ steps.config_exists.outputs.passed }}" != "true" ]; then
+            echo "score=0.0" >> "$GITHUB_OUTPUT"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            echo "⏭ Skipped: no config file to validate"
+            exit 0
+          fi
+
+          set +e
+          npx --yes @action-validator/cli .github/workflows/ci.yml > validation-output.txt 2>&1
+          EXIT=$?
+          set -e
+
+          if [ "$EXIT" -eq 0 ]; then
+            echo "score=1.0" >> "$GITHUB_OUTPUT"
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Workflow schema is valid"
+          else
+            echo "score=0.0" >> "$GITHUB_OUTPUT"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            echo "❌ Workflow schema validation failed:"
+            cat validation-output.txt
+          fi
+
+      # ── Métrica: ci_pipeline_passes (verifica los check runs del CI del estudiante) ──
+      # Este check solo tiene contexto real en PR events donde el CI del estudiante
+      # ya corrió. En push events sin PR, se marca como unavailable.
+      - name: Check student CI pipeline status
+        id: ci_passes
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.number }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # Obtiene los check runs del commit (excluye los del propio grader)
+          CHECKS=$(gh api \
+            "repos/${{ github.repository }}/commits/${HEAD_SHA}/check-runs" \
+            --jq '[.check_runs[] | select(.name != "grade")] | { total: length, passing: [.[] | select(.conclusion == "success")] | length }' \
+            2>/dev/null || echo '{"total":0,"passing":0}')
+
+          TOTAL=$(echo "$CHECKS" | node -e "console.log(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).total)")
+          PASSING=$(echo "$CHECKS" | node -e "console.log(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).passing)")
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "score=null" >> "$GITHUB_OUTPUT"
+            echo "passed=null" >> "$GITHUB_OUTPUT"
+            echo "unavailable=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️  No CI check runs found yet"
+          elif [ "$TOTAL" -eq "$PASSING" ]; then
+            echo "score=1.0" >> "$GITHUB_OUTPUT"
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+            echo "unavailable=false" >> "$GITHUB_OUTPUT"
+            echo "✅ All $TOTAL CI checks pass"
+          else
+            echo "score=0.0" >> "$GITHUB_OUTPUT"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            echo "unavailable=false" >> "$GITHUB_OUTPUT"
+            echo "❌ $PASSING/$TOTAL CI checks pass"
+          fi
+
+      # ── Reporte final ─────────────────────────────────────────────────────
+      - name: Build grader report
+        run: |
+          CI_SCORE="${{ steps.ci_passes.outputs.score }}"
+          CI_PASSED="${{ steps.ci_passes.outputs.passed }}"
+          CI_UNAVAILABLE="${{ steps.ci_passes.outputs.unavailable }}"
+
+          [ -z "$CI_SCORE" ] && CI_SCORE="null"
+          [ -z "$CI_PASSED" ] && CI_PASSED="null"
+          [ -z "$CI_UNAVAILABLE" ] && CI_UNAVAILABLE="true"
+
+          cat > grader-report.json << EOF
+          {
+            "schemaVersion": "1.0",
+            "templateSlug": "devops-config",
+            "runId": "${{ github.run_id }}",
+            "sha": "${{ github.sha }}",
+            "metrics": [
+              {
+                "metricKey": "config_file_exists",
+                "score": ${{ steps.config_exists.outputs.score }},
+                "passed": ${{ steps.config_exists.outputs.passed }},
+                "unavailable": false
+              },
+              {
+                "metricKey": "config_file_valid_schema",
+                "score": ${{ steps.config_valid.outputs.score }},
+                "passed": ${{ steps.config_valid.outputs.passed }},
+                "unavailable": false
+              },
+              {
+                "metricKey": "ci_pipeline_passes",
+                "score": $CI_SCORE,
+                "passed": $CI_PASSED,
+                "unavailable": $CI_UNAVAILABLE
+              }
+            ]
+          }
+          EOF
+          cat grader-report.json
+
+      - name: Upload grader report
+        uses: actions/upload-artifact@v4
+        with:
+          name: grader-report
+          path: grader-report.json

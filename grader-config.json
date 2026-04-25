@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0",
+  "templateSlug": "devops-config",
+  "evaluationBlocks": [
+    {
+      "blockId": "auto",
+      "evaluationType": "automated_pipeline",
+      "metrics": [
+        {
+          "metricKey": "config_file_exists",
+          "worker": "ConfigWorker",
+          "weight": 20,
+          "threshold": 1.0,
+          "config": {
+            "patterns": [".github/workflows/ci.yml", ".github/workflows/ci.yaml"]
+          }
+        },
+        {
+          "metricKey": "config_file_valid_schema",
+          "worker": "ConfigWorker",
+          "weight": 30,
+          "threshold": 1.0,
+          "config": {
+            "validator": "actionlint",
+            "target": ".github/workflows/ci.yml"
+          }
+        },
+        {
+          "metricKey": "ci_pipeline_passes",
+          "worker": "GitHubApiWorker",
+          "weight": 50,
+          "threshold": 1.0,
+          "config": {
+            "checkRunName": "build",
+            "requireAllPassing": true
+          }
+        }
+      ]
+    }
+  ]
+}

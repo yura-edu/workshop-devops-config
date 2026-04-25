@@ -1,0 +1,15 @@
+{
+  "name": "workshop-devops-config",
+  "version": "1.0.0",
+  "description": "Starter code for the DevOps y Configuración workshop",
+  "main": "src/app.js",
+  "scripts": {
+    "test": "jest",
+    "lint": "eslint src/",
+    "build": "echo 'Build step: OK'"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "jest": "^29.0.0"
+  }
+}
